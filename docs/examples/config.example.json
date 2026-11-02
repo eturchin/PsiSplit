@@ -1,0 +1,23 @@
+{
+  "fullProxyPort": 18080,
+  "filteredProxyPort": 18081,
+  "pacPort": 18082,
+  "startPsiphonOnLaunch": false,
+  "applyPacOnStart": true,
+  "stopPsiphonOnExit": true,
+  "minimizeToTray": true,
+  "tunnelShellsThroughSiteFilter": false,
+  "sites": [
+    { "pattern": "example.com", "enabled": true },
+    { "pattern": "*.example.org", "enabled": true }
+  ],
+  "apps": [
+    {
+      "id": "example-browser",
+      "name": "Chrome",
+      "path": "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe",
+      "arguments": "",
+      "mode": "Filtered"
+    }
+  ]
+}

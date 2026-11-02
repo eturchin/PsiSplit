@@ -1,0 +1,10 @@
+{
+  "version": "Psiphon Console Client\r\n  Build Date: 2026-07-23T19:15:13+00:00\r\n  Built With: go1.26.5\r\n  Repository: https://github.com/Psiphon-Labs/psiphon-tunnel-core.git\r\n  Revision: 24b8381cc3",
+  "source": "https://github.com/Psiphon-Labs/psiphon-tunnel-core",
+  "files": {
+    "psiphon-tunnel-core.exe": "2EDA700D3D5723F6C792718A5B7CFE5D35A9888168B539EF042312805A1D2E02",
+    "server_list.dat": "02DA7488733CB5920E36AF675A3C62D0278330079338E41C453CADB527BFF4D2",
+    "bootstrap.json": "5B1E4E30F0D960AF773F283A745EFAE8142D7197B0DA83D714DE220D44637EC2",
+    "LICENSE.txt": "0AE0485A5BD37A63E63603596417E4EB0E653334FA6C7F932CA3A0E85D4AF227"
+  }
+}

@@ -1,0 +1,17 @@
+PsiSplit for Windows 10/11 x64
+
+Run PsiSplit.exe, click Start VPN, and wait for the connected status.
+The Psiphon engine and .NET runtime are included. No separate Psiphon app is needed.
+
+Choose apps on the Apps tab, or enable Site mode for browsers using the Windows proxy.
+Site mode applies automatically after connecting by default; change this in Settings.
+Close minimizes to the tray by default. Use the tray menu to exit completely.
+
+Routing is proxy-based: programs must support the supplied proxy settings.
+This is not a system-wide packet VPN or a kill switch. PAC has a DIRECT fallback.
+
+Documentation and source:
+https://github.com/eturchin/PsiSplit
+
+Keep THIRD-PARTY-NOTICES.md and Psiphon-LICENSE.txt with distributed copies.
+The corresponding Psiphon source revision is linked in the notices.

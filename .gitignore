@@ -1,0 +1,49 @@
+# Build outputs and local publishing / verification files
+**/bin/
+**/obj/
+/artifacts/
+/dist/
+/TestResults/
+*.pdb
+*.log
+*.tmp
+*.dmp
+*.cache
+*.zip
+
+# IDE and machine-specific settings
+/.idea/
+/.vs/
+/.vscode/
+*.user
+*.suo
+*.sln.docstates
+*.DotSettings.user
+/.codex/
+/.agents/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# User profiles, credentials, runtime stores and proxy snapshots
+.env
+.env.*
+!.env.example
+**/config.json
+**/config.json.*
+**/psiphon.config
+**/proxy-backup.json
+**/session.json
+**/controller.lock
+**/notices.jsonl
+**/logs/
+**/ca.psiphon.PsiphonTunnel.tunnel-core/
+*.pem
+*.pfx
+*.p12
+*.key
+
+# Never stage arbitrary executables. The audited upstream engine is intentional.
+*.exe
+*.dll
+!src/PsiSplit.Core/Resources/Psiphon/psiphon-tunnel-core.exe

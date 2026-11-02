@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PsiSplit.Core\PsiSplit.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\PsiSplit.png" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>PsiSplit</AssemblyName>
+    <Product>PsiSplit</Product>
+    <AssemblyTitle>PsiSplit — Selective VPN</AssemblyTitle>
+    <Version>1.1.0</Version>
+    <ApplicationIcon>Assets\PsiSplit.ico</ApplicationIcon>
+  </PropertyGroup>
+
+</Project>

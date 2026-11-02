@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <!-- Keep developer checkout paths out of debug/source metadata. -->
+    <PathMap>$(MSBuildThisFileDirectory)=/_/PsiSplit/</PathMap>
+  </PropertyGroup>
+</Project>

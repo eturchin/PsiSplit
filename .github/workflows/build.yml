@@ -1,0 +1,39 @@
+name: Build and verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+      - name: Check repository privacy
+        run: ./tools/check-privacy.ps1
+      - name: Restore
+        run: dotnet restore PsiSplit.sln -r win-x64 -p:NuGetAudit=false
+      - name: Build
+        run: dotnet build PsiSplit.sln -c Release --no-restore -p:UseSharedCompilation=false -nr:false
+      - name: Run local self-tests
+        run: dotnet run --project src/PsiSplit.SelfTest -c Release --no-build -- --local
+      - name: Publish standalone Windows app
+        run: ./publish.ps1 -NoRestore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: PsiSplit-win-x64
+          path: dist/standalone/*
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\Psiphon\*" LogicalName="PsiSplit.Psiphon.%(Filename)%(Extension)" />
+    <InternalsVisibleTo Include="PsiSplit.SelfTest" />
+  </ItemGroup>
+
+  <Target Name="RequireBundledPsiphon" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('Resources\Psiphon\manifest.json')" Text="Import the official Psiphon tunnel core with tools/import-psiphon-core.ps1 before building." />
+  </Target>
+
+</Project>
