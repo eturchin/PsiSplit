@@ -3,6 +3,10 @@ PsiSplit for Windows 10/11 x64
 Run PsiSplit.exe, click Start VPN, and wait for the connected status.
 The Psiphon engine and .NET runtime are included. No separate Psiphon app is needed.
 
+Home shows current VPN download/upload speed and separate local proxy rates.
+Use Servers to choose an exit country or Automatic. Saving a selection keeps the
+current tunnel running; reconnect explicitly when you want to apply the change.
+
 Choose apps on the Apps tab, or enable Site mode for browsers using the Windows proxy.
 Site mode applies automatically after connecting by default; change this in Settings.
 Close minimizes to the tray by default. Use the tray menu to exit completely.

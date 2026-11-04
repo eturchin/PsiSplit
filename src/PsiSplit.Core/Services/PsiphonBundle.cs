@@ -14,7 +14,7 @@ public static class PsiphonBundle
     public static string Version => Manifest.Version;
     public static string CoreHash => Manifest.Files["psiphon-tunnel-core.exe"];
 
-    public static JsonObject CreateConfig(string dataDirectory)
+    public static JsonObject CreateConfig(string dataDirectory, string egressRegion = PsiphonRegionCatalog.DefaultRegion)
     {
         using var resource = OpenResource("bootstrap.json");
         var config = JsonNode.Parse(resource)?.AsObject()
@@ -29,6 +29,10 @@ public static class PsiphonBundle
         config["EnableUpgradeDownload"] = false;
         config["EnableFeedbackUpload"] = false;
         config["EmitDiagnosticNotices"] = false;
+        config["EmitBytesTransferred"] = true;
+        config["EgressRegion"] = PsiphonRegionCatalog.NormalizeCode(egressRegion)
+            ?? throw new ArgumentException("Choose a two-letter exit country code or Automatic.", nameof(egressRegion));
+        config["DisableServerEntriesReporter"] = false;
         config["EstablishTunnelTimeoutSeconds"] = 145;
         return config;
     }

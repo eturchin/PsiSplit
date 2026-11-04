@@ -73,7 +73,7 @@
 
             <!-- ============================= HOME ============================= -->
             <TabItem Header="Home">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer x:Name="HomeScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <Grid Margin="0,0,4,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -103,6 +103,23 @@
                                     <TextBlock Style="{StaticResource Muted}" FontSize="11" Margin="0,14,0,0"
                                                Text="VPN and Site mode are controlled from the top bar."/>
 
+                                    <Grid Margin="0,18,0,0" ToolTip="Current payload speed reported by Psiphon. Direct filtered traffic is counted separately below.">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="↓ VPN download" Style="{StaticResource Muted}" FontSize="11"/>
+                                            <TextBlock x:Name="VpnDownloadSpeedText" Text="0 B/s" FontFamily="Consolas"
+                                                       FontSize="25" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" Margin="0,5,0,0"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="↑ VPN upload" Style="{StaticResource Muted}" FontSize="11"/>
+                                            <TextBlock x:Name="VpnUploadSpeedText" Text="0 B/s" FontFamily="Consolas"
+                                                       FontSize="25" FontWeight="SemiBold" Foreground="{StaticResource GreenBrush}" Margin="0,5,0,0"/>
+                                        </StackPanel>
+                                    </Grid>
+
                                     <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,14,0,14"/>
 
                                     <Grid>
@@ -111,6 +128,7 @@
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
                                         <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
@@ -133,6 +151,10 @@
                                         <TextBlock Grid.Row="3" Text="PAC" Style="{StaticResource Muted}"/>
                                         <TextBlock x:Name="PacText" Grid.Row="3" Grid.Column="1" Text="—"
                                                    FontFamily="Consolas" FontSize="12" TextTrimming="CharacterEllipsis"/>
+
+                                        <TextBlock Grid.Row="4" Text="Exit country" Style="{StaticResource Muted}" Margin="0,7,0,0"/>
+                                        <TextBlock x:Name="HomeCountryText" Grid.Row="4" Grid.Column="1" Text="Not connected"
+                                                   FontSize="12" Margin="0,7,0,0" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
                                 </StackPanel>
                             </Border>
@@ -187,30 +209,36 @@
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
 
                                         <TextBlock Text="Full proxy" Style="{StaticResource Muted}" FontSize="11"/>
-                                        <TextBlock x:Name="FullTrafficText" Grid.Column="1"
+                                        <TextBlock x:Name="FullSpeedText" Grid.Column="1" Text="↑ 0 B/s · ↓ 0 B/s" TextAlignment="Right"
+                                                   FontFamily="Consolas" FontSize="12"/>
+                                        <TextBlock x:Name="FullTrafficText" Grid.Row="1" Grid.Column="1"
                                                    Text="↑ 0 B · ↓ 0 B" TextAlignment="Right"
-                                                   FontFamily="Consolas" FontSize="12"
+                                                   FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0"
                                                    TextTrimming="CharacterEllipsis"/>
-                                        <TextBlock x:Name="FullConnectionsText" Grid.Row="1" Grid.Column="1"
+                                        <TextBlock x:Name="FullConnectionsText" Grid.Row="2" Grid.Column="1"
                                                    Text="0/0 active · VPN 0 · direct 0" TextAlignment="Right"
                                                    Style="{StaticResource Muted}" FontSize="10"
                                                    Margin="0,2,0,10" TextTrimming="CharacterEllipsis"/>
 
-                                        <TextBlock Grid.Row="2" Text="Filtered" Style="{StaticResource Muted}" FontSize="11"/>
-                                        <TextBlock x:Name="FilteredTrafficText" Grid.Row="2" Grid.Column="1"
+                                        <TextBlock Grid.Row="3" Text="Filtered" Style="{StaticResource Muted}" FontSize="11"/>
+                                        <TextBlock x:Name="FilteredSpeedText" Grid.Row="3" Grid.Column="1" Text="↑ 0 B/s · ↓ 0 B/s" TextAlignment="Right"
+                                                   FontFamily="Consolas" FontSize="12"/>
+                                        <TextBlock x:Name="FilteredTrafficText" Grid.Row="4" Grid.Column="1"
                                                    Text="↑ 0 B · ↓ 0 B" TextAlignment="Right"
-                                                   FontFamily="Consolas" FontSize="12"
+                                                   FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0"
                                                    TextTrimming="CharacterEllipsis"/>
-                                        <TextBlock x:Name="FilteredConnectionsText" Grid.Row="3" Grid.Column="1"
+                                        <TextBlock x:Name="FilteredConnectionsText" Grid.Row="5" Grid.Column="1"
                                                    Text="0/0 active · VPN 0 · direct 0" TextAlignment="Right"
                                                    Style="{StaticResource Muted}" FontSize="10"
                                                    Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
 
-                                    <TextBlock Text="Counted since PsiSplit started"
+                                    <TextBlock Text="Rates update every second. Filtered includes direct traffic."
                                                Style="{StaticResource Muted}" FontSize="10" Margin="0,10,0,0"/>
                                 </StackPanel>
                             </Border>
@@ -231,6 +259,79 @@
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>
+            </TabItem>
+
+            <!-- ============================= SERVERS ============================= -->
+            <TabItem Header="Servers">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="340"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource CardStyle}" Margin="0,0,16,0">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Top">
+                                <DockPanel>
+                                    <TextBlock Text="Exit countries" Style="{StaticResource H2}"/>
+                                    <TextBlock x:Name="CountryCountText" HorizontalAlignment="Right" Style="{StaticResource Muted}"/>
+                                </DockPanel>
+                                <TextBlock Text="Choose a country. Psiphon automatically selects a server in it."
+                                           Style="{StaticResource Muted}" FontSize="12" Margin="0,6,0,0"/>
+                                <TextBlock x:Name="CountryReportText" Text="Connect to refresh the country list."
+                                           Style="{StaticResource Muted}" FontSize="11" Margin="0,8,0,14"/>
+                            </StackPanel>
+                            <ListBox x:Name="CountryList" Style="{StaticResource ListBoxStyle}"
+                                     ItemContainerStyle="{StaticResource ListItemStyle}"
+                                     SelectedValuePath="Code" SelectionChanged="CountryList_SelectionChanged">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
+                                                <TextBlock Text="{Binding Source}" Style="{StaticResource Muted}" FontSize="10" Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="{Binding CodeLabel}" FontFamily="Consolas" FontSize="12"
+                                                       VerticalAlignment="Center" Foreground="{StaticResource AccentBrush}" Margin="14,0,0,0"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </DockPanel>
+                    </Border>
+                    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <Border Style="{StaticResource CardStyle}">
+                                <StackPanel>
+                                    <TextBlock Text="Current connection" Style="{StaticResource H2}"/>
+                                    <TextBlock x:Name="ConnectedCountryText" Text="Not connected" FontSize="22" FontWeight="SemiBold"
+                                               TextWrapping="Wrap" Margin="0,12,0,0"/>
+                                    <TextBlock Text="Saved preference" Style="{StaticResource Muted}" FontSize="11" Margin="0,18,0,0"/>
+                                    <TextBlock x:Name="SavedCountryText" Text="Netherlands (NL)" FontSize="13" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    <Button x:Name="SaveCountryButton" Content="Save selection" Style="{StaticResource SecondaryButton}"
+                                            Click="SaveCountry_Click" HorizontalAlignment="Stretch" Margin="0,18,0,8"/>
+                                    <Button x:Name="ConnectCountryButton" Content="Connect with selection" Style="{StaticResource PrimaryButton}"
+                                            Click="ConnectCountry_Click" HorizontalAlignment="Stretch"/>
+                                    <TextBlock x:Name="CountryStatusText" Style="{StaticResource Muted}" FontSize="11" Margin="0,12,0,0"/>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="How selection works" Style="{StaticResource H2}"/>
+                                    <TextBlock Text="Automatic lets Psiphon choose the best available country and server."
+                                               Style="{StaticResource Muted}" FontSize="12" Margin="0,10,0,0"/>
+                                    <TextBlock Text="Save selection keeps your current tunnel running. Connect or reconnect when you want to apply it."
+                                               Style="{StaticResource Muted}" FontSize="12" Margin="0,10,0,0"/>
+                                    <TextBlock Text="The country list is reported by Psiphon. Actual reachability is confirmed when connecting."
+                                               Style="{StaticResource Muted}" FontSize="12" Margin="0,10,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
             </TabItem>
 
             <!-- ============================= SITES ============================= -->

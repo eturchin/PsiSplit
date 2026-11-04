@@ -34,8 +34,11 @@ Desktop.ini
 **/psiphon.config
 **/proxy-backup.json
 **/session.json
+**/regions.json
+**/regions.json.tmp
 **/controller.lock
 **/notices.jsonl
+**/notices/
 **/logs/
 **/ca.psiphon.PsiphonTunnel.tunnel-core/
 *.pem

@@ -26,8 +26,8 @@ try {
     }
     $binaryExtensions = @('.exe', '.dll', '.png', '.jpg', '.jpeg', '.ico', '.dat')
     foreach ($relative in $files) {
-        if ($relative -match '(^|/)(bin|obj|dist|artifacts|\.idea|\.vs|\.vscode|logs)(/|$)' -or
-            $relative -match '(^|/)(config\.json|psiphon\.config|proxy-backup\.json|session\.json|\.env)(\.|$)') {
+        if ($relative -match '(^|/)(bin|obj|dist|artifacts|\.idea|\.vs|\.vscode|logs|notices)(/|$)' -or
+            $relative -match '(^|/)(config\.json|psiphon\.config|proxy-backup\.json|session\.json|regions\.json|\.env)(\.|$)') {
             $problems.Add("$relative : local/generated state is tracked")
         }
         if ($relative -match '(?i)\.(exe|dll)$' -and $relative -ne 'src/PsiSplit.Core/Resources/Psiphon/psiphon-tunnel-core.exe') {

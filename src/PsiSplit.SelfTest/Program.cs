@@ -33,6 +33,7 @@ internal static class Program
         TestChatGptDefaults(root);
         TestPacSyntaxWithJScript();
         await BundledEngineTests.RunLocalAsync(root, Check);
+        await ConnectionFeatureTests.RunLocalAsync(root, Check);
 
         if (args.Contains("--local", StringComparer.OrdinalIgnoreCase))
         {

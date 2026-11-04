@@ -13,6 +13,8 @@ It is a **proxy-based routing tool**. Apps must honor the supplied proxy setting
 
 Real application captures from the offline `--preview` mode, using demonstration profiles. No live connection, user app list, account details, or private file paths are shown. Connection controls are disabled in preview.
 
+The gallery shows the 1.1 interface. Version 1.2 adds the live speed display and **Servers** tab described below.
+
 | Home | Sites |
 | --- | --- |
 | ![Home: connection status, quick launch, local endpoints and counters](docs/images/home.jpg) | ![Sites: domain rules and browser Site mode](docs/images/sites.jpg) |
@@ -26,7 +28,8 @@ Real application captures from the offline `--preview` mode, using demonstration
 - **Browser Site mode.** Apply a Windows PAC file so compatible browsers use the tunnel for listed domains and connect directly to other sites.
 - **App profiles.** Save programs, arguments, and a routing mode. Chromium browsers also receive an explicit proxy argument.
 - **Shell shortcuts.** Launch CMD or PowerShell with proxy environment variables inherited by compatible tools and child processes.
-- **Traffic visibility.** See byte counts, active/total connections, and tunneled/direct route counts for each local proxy.
+- **Live speed.** See VPN download/upload rates and separate per-proxy rates, refreshed every second, alongside byte and connection counters.
+- **Exit-country selection.** Choose a country on **Servers**, or let Psiphon choose automatically. The server within a country is selected by the engine.
 - **Tray operation.** Keep routing active while the main window is hidden; exit from the tray menu when finished.
 - **Isolated engine ownership.** Stop only the core managed by this PsiSplit profile. Other Psiphon instances are left alone.
 - **Portable Windows build.** The release includes .NET and the engine; a separate runtime installation is unnecessary.
@@ -64,6 +67,14 @@ The new executable is written to `dist/standalone/PsiSplit.exe`. Publishing does
 
 The engine's own HTTP and SOCKS ports are separate, selected by Windows at startup, and bound to loopback. PsiSplit reads them from the core's JSON notices instead of depending on the official client's registry or default ports.
 
+## Speed and exit countries
+
+**Home** displays current VPN download and upload in B/s, KB/s, or MB/s. These use the core's actual transferred-payload notices. Full and Filtered proxy rates are shown separately; Filtered includes its direct routes, so it can differ from VPN speed. Rates use the actual elapsed sample time, return to zero when idle, and reset when counters restart. They measure current traffic, not the maximum speed of your internet connection.
+
+On **Servers**, select an exit country and choose **Save selection** to keep it for the next connection. Saving leaves the current tunnel running. **Connect with selection** starts a connection; **Reconnect with selection** explicitly replaces the current owned tunnel with the selected preference. **Automatic (best available)** lets Psiphon select both the country and the server.
+
+The country list updates from Psiphon's `AvailableEgressRegions` notices. Before a live report is available, PsiSplit shows the previous report or countries found in the bundled seed list, labeled accordingly. A reported country is a candidate, not a guarantee of immediate reachability. The connected country is shown separately from the saved preference and comes from the core's `ConnectedServerRegion` notice.
+
 ```mermaid
 flowchart LR
     Shell[Proxy-aware shell tools] --> Full[Full proxy]
@@ -93,7 +104,7 @@ HTTPS uses HTTP `CONNECT` relays. PsiSplit does not install a certificate or dec
 
 Disabled rules are ignored. Rules match hostnames, not URL paths or destination IP ranges. When the site list changes, PsiSplit refreshes the PAC content and its versioned URL so compatible clients can reload it.
 
-The default profile includes `chatgpt.com`, `openai.com`, `oaistatic.com`, and `oaiusercontent.com`. Sites may need additional domains for authentication, CDNs, or downloads. The supplied engine bootstrap selects Netherlands as its exit region; the public bootstrap can be refreshed at build time.
+The default profile includes `chatgpt.com`, `openai.com`, `oaistatic.com`, and `oaiusercontent.com`. Sites may need additional domains for authentication, CDNs, or downloads. The default exit preference is Netherlands, preserving earlier PsiSplit profiles; it can now be changed on **Servers**.
 
 ## App and browser behavior
 
@@ -117,6 +128,8 @@ The default profile includes `chatgpt.com`, `openai.com`, `oaistatic.com`, and `
 | `%LOCALAPPDATA%/PsiSplit/Tunnel/bin/<SHA256>/` | Extracted, integrity-checked engine resources and its license. |
 | `%LOCALAPPDATA%/PsiSplit/Tunnel/data/` | The engine's private server cache and datastore. |
 | `%LOCALAPPDATA%/PsiSplit/Tunnel/session.json` | Identity of the core owned by this PsiSplit profile. |
+| `%LOCALAPPDATA%/PsiSplit/Tunnel/regions.json` | Last reported exit-country list and report time. |
+| `%LOCALAPPDATA%/PsiSplit/Tunnel/notices/` | A separate notice stream per engine launch; retained while detached and removed after stop when possible. |
 
 These are runtime locations, resolved on each machine. Personal settings, logs, IDE files, verification reports, and build outputs are excluded from version control. Public network bootstrap keys are intentionally included; account tokens and the official client's live datastore are not. See [privacy and repository contents](docs/privacy.md).
 

@@ -17,6 +17,9 @@ public sealed class AppConfig
     /// <summary>Legacy setting; the bundled engine now allocates its own free loopback ports.</summary>
     public int PsiphonHttpProxyPort { get; set; } = 23934;
 
+    /// <summary>ISO country code for exit selection; empty selects the best available country.</summary>
+    public string EgressRegion { get; set; } = "NL";
+
     public bool StartPsiphonOnLaunch { get; set; }
     public bool ApplyPacOnStart { get; set; } = true;
     public bool StopPsiphonOnExit { get; set; } = true;
@@ -31,6 +34,7 @@ public sealed class AppConfig
     public void Normalize()
     {
         PsiphonPath = (PsiphonPath ?? string.Empty).Trim().Trim('"');
+        EgressRegion = Services.PsiphonRegionCatalog.NormalizeCode(EgressRegion) ?? Services.PsiphonRegionCatalog.DefaultRegion;
         FullProxyPort = NormalizePort(FullProxyPort, 18080);
         FilteredProxyPort = NormalizePort(FilteredProxyPort, 18081);
         PacPort = NormalizePort(PacPort, 18082);
@@ -65,6 +69,7 @@ public sealed class AppConfig
             FilteredProxyPort = FilteredProxyPort,
             PacPort = PacPort,
             PsiphonHttpProxyPort = PsiphonHttpProxyPort,
+            EgressRegion = EgressRegion,
             StartPsiphonOnLaunch = StartPsiphonOnLaunch,
             ApplyPacOnStart = ApplyPacOnStart,
             StopPsiphonOnExit = StopPsiphonOnExit,

@@ -23,17 +23,28 @@ public sealed class PsiphonController : IAsyncDisposable
     private int _socksPort;
     private int _tunnelCount;
     private string _lastError = "";
+    private long _bytesSent;
+    private long _bytesReceived;
+    private string _connectedRegion = "";
+    private EgressRegionReport _regionReport = EgressRegionReport.Empty;
+    private string _attachedSettingsKey = "";
+    private string _noticePath;
     private volatile PsiphonState _state = PsiphonState.Stopped;
     private CancellationTokenSource? _watchCts;
     private Task? _noticeTask;
     private Task? _healthTask;
     private bool _disposed;
 
-    public PsiphonController(LogService log, string? runtimeDirectory = null)
+    public PsiphonController(LogService log, string? runtimeDirectory = null,
+        string egressRegion = PsiphonRegionCatalog.DefaultRegion)
     {
         _log = log;
         RuntimeDirectory = Path.GetFullPath(runtimeDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PsiSplit", "Tunnel"));
+        RequestedEgressRegion = PsiphonRegionCatalog.NormalizeCode(egressRegion)
+            ?? throw new ArgumentException("Choose a two-letter exit country code or Automatic.", nameof(egressRegion));
+        _noticePath = Path.Combine(RuntimeDirectory, "notices.jsonl");
+        LoadRegionCache();
     }
 
     public string RuntimeDirectory { get; }
@@ -42,10 +53,17 @@ public sealed class PsiphonController : IAsyncDisposable
     public int SocksProxyPort => Volatile.Read(ref _socksPort);
     public int? ProcessId => _process?.Id;
     public bool CanStop => _process is not null;
+    public string RequestedEgressRegion { get; }
+    public string ConnectedRegion => Volatile.Read(ref _connectedRegion);
+    public EgressRegionReport RegionReport => Volatile.Read(ref _regionReport);
+    public TransferTotals TrafficTotals => new(Interlocked.Read(ref _bytesSent), Interlocked.Read(ref _bytesReceived));
+    private string SettingsKey => "traffic-regions-v1:" + RequestedEgressRegion;
+    private string RegionCachePath => Path.Combine(RuntimeDirectory, "regions.json");
     private string SessionPath => Path.Combine(RuntimeDirectory, "session.json");
-    private string NoticePath => Path.Combine(RuntimeDirectory, "notices.jsonl");
+    private string NoticePath => _noticePath;
 
     public event Action<PsiphonState>? StateChanged;
+    public event Action? ConnectionInfoChanged;
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -69,6 +87,7 @@ public sealed class PsiphonController : IAsyncDisposable
             if (TryAttachOwnedSession())
             {
                 if (string.Equals(_processExecutable, executable, StringComparison.OrdinalIgnoreCase) &&
+                    _attachedSettingsKey == SettingsKey &&
                     await ProbeAsync(HttpProxyPort, cancellationToken))
                 {
                     _log.Info($"Reattached to the PsiSplit tunnel core, PID {_process!.Id}.");
@@ -82,10 +101,14 @@ public sealed class PsiphonController : IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             _httpPort = _socksPort = _tunnelCount = 0;
             _lastError = "";
+            ResetTunnelInfo();
             var dataDirectory = Path.Combine(RuntimeDirectory, "data");
             Directory.CreateDirectory(dataDirectory);
             var configPath = Path.Combine(RuntimeDirectory, "psiphon.config");
-            await File.WriteAllTextAsync(configPath, PsiphonBundle.CreateConfig(dataDirectory).ToJsonString(), cancellationToken);
+            await File.WriteAllTextAsync(configPath, PsiphonBundle.CreateConfig(dataDirectory, RequestedEgressRegion).ToJsonString(), cancellationToken);
+            var noticesDirectory = Path.Combine(RuntimeDirectory, "notices");
+            Directory.CreateDirectory(noticesDirectory);
+            _noticePath = Path.Combine(noticesDirectory, Guid.NewGuid().ToString("N") + ".jsonl");
             await File.WriteAllTextAsync(NoticePath, "", cancellationToken);
 
             var startInfo = new ProcessStartInfo
@@ -259,12 +282,74 @@ public sealed class PsiphonController : IAsyncDisposable
                 break;
             case "Tunnels":
                 Volatile.Write(ref _tunnelCount, notice.Value);
+                if (notice.Value == 0) Volatile.Write(ref _connectedRegion, "");
                 _log.Info(notice.Value > 0 ? "Tunnel core established a tunnel." : "Tunnel core is connecting...");
+                break;
+            case "AvailableEgressRegions":
+                var report = new EgressRegionReport(notice.Regions, DateTimeOffset.UtcNow, false);
+                Volatile.Write(ref _regionReport, report);
+                SaveRegionCache(report);
+                NotifyConnectionInfoChanged();
+                break;
+            case "ConnectedServerRegion":
+                Volatile.Write(ref _connectedRegion, notice.Region);
+                NotifyConnectionInfoChanged();
+                break;
+            case "BytesTransferred":
+                Interlocked.Add(ref _bytesSent, notice.BytesSent);
+                Interlocked.Add(ref _bytesReceived, notice.BytesReceived);
                 break;
             case "Error":
                 _lastError = notice.Message;
                 _log.Error("Tunnel core: " + notice.Message);
                 break;
+        }
+    }
+
+    private void ResetTunnelInfo()
+    {
+        Interlocked.Exchange(ref _bytesSent, 0);
+        Interlocked.Exchange(ref _bytesReceived, 0);
+        Volatile.Write(ref _connectedRegion, "");
+        NotifyConnectionInfoChanged();
+    }
+
+    private void NotifyConnectionInfoChanged()
+    {
+        try { ConnectionInfoChanged?.Invoke(); }
+        catch (Exception exception) { _log.Warn("Connection information handler: " + exception.Message); }
+    }
+
+    private void LoadRegionCache()
+    {
+        try
+        {
+            var info = new FileInfo(RegionCachePath);
+            if (!info.Exists || info.Length > 64 * 1024) return;
+            var cached = JsonSerializer.Deserialize<RegionCache>(File.ReadAllText(RegionCachePath));
+            if (cached is null || cached.Regions is null || cached.Regions.Length > 300) return;
+            var codes = cached.Regions.Select(PsiphonRegionCatalog.NormalizeCode).ToArray();
+            if (codes.Any(code => code is not { Length: 2 })) return;
+            _regionReport = new EgressRegionReport(Array.AsReadOnly(codes.Select(code => code!).Distinct().Order().ToArray()),
+                cached.ReportedAtUtc, true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _log.Warn("Ignoring unavailable country cache: " + exception.Message);
+        }
+    }
+
+    private void SaveRegionCache(EgressRegionReport report)
+    {
+        try
+        {
+            var temp = RegionCachePath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(new RegionCache(report.Codes.ToArray(), report.ReportedAtUtc!.Value)));
+            File.Move(temp, RegionCachePath, overwrite: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _log.Warn("Could not save the country list: " + exception.Message);
         }
     }
 
@@ -298,7 +383,7 @@ public sealed class PsiphonController : IAsyncDisposable
     {
         var process = _process!;
         var session = new OwnedSession(process.Id, process.StartTime.ToUniversalTime().Ticks,
-            _processExecutable!, HttpProxyPort, SocksProxyPort);
+            _processExecutable!, HttpProxyPort, SocksProxyPort, SettingsKey, ConnectedRegion, Path.GetFileName(NoticePath));
         var temp = SessionPath + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(session));
         File.Move(temp, SessionPath, overwrite: true);
@@ -313,6 +398,10 @@ public sealed class PsiphonController : IAsyncDisposable
         {
             var session = JsonSerializer.Deserialize<OwnedSession>(File.ReadAllText(SessionPath));
             if (session is null || !IsPrivateCorePath(session.Executable)) return false;
+            var noticeFile = session.NoticeFile ?? "";
+            if (noticeFile.Length > 0 && noticeFile != "notices.jsonl" &&
+                (Path.GetFileName(noticeFile) != noticeFile || Path.GetExtension(noticeFile) != ".jsonl" ||
+                 !Guid.TryParseExact(Path.GetFileNameWithoutExtension(noticeFile), "N", out _))) return false;
             candidate = Process.GetProcessById(session.ProcessId);
             _ = candidate.SafeHandle; // Retain the exact process identity across PID reuse.
             if (candidate.HasExited || candidate.StartTime.ToUniversalTime().Ticks != session.StartTimeUtcTicks ||
@@ -322,6 +411,11 @@ public sealed class PsiphonController : IAsyncDisposable
             candidate = null;
             _httpPort = session.HttpPort;
             _socksPort = session.SocksPort;
+            _attachedSettingsKey = session.SettingsKey ?? "";
+            _noticePath = noticeFile.Length == 0 || noticeFile == "notices.jsonl"
+                ? Path.Combine(RuntimeDirectory, "notices.jsonl")
+                : Path.Combine(RuntimeDirectory, "notices", noticeFile);
+            Volatile.Write(ref _connectedRegion, PsiphonRegionCatalog.NormalizeCode(session.ConnectedRegion) ?? "");
             return true;
         }
         catch (Exception exception) when (exception is IOException or JsonException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
@@ -356,7 +450,15 @@ public sealed class PsiphonController : IAsyncDisposable
         _process.Dispose();
         _process = null;
         _httpPort = _socksPort = _tunnelCount = 0;
+        ResetTunnelInfo();
         File.Delete(SessionPath);
+        // Each launch gets its own notice file. A reader or antivirus holding an
+        // old file must not prevent a country switch from starting a new core.
+        try { File.Delete(NoticePath); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _log.Warn("Previous tunnel notices are still in use: " + exception.Message);
+        }
     }
 
     private void ReleaseLease()
@@ -396,5 +498,7 @@ public sealed class PsiphonController : IAsyncDisposable
         finally { _gate.Release(); }
     }
 
-    private sealed record OwnedSession(int ProcessId, long StartTimeUtcTicks, string Executable, int HttpPort, int SocksPort);
+    private sealed record RegionCache(string[] Regions, DateTimeOffset ReportedAtUtc);
+    private sealed record OwnedSession(int ProcessId, long StartTimeUtcTicks, string Executable, int HttpPort, int SocksPort,
+        string SettingsKey = "", string ConnectedRegion = "", string NoticeFile = "");
 }

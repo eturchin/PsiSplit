@@ -18,7 +18,7 @@
     <AssemblyName>PsiSplit</AssemblyName>
     <Product>PsiSplit</Product>
     <AssemblyTitle>PsiSplit — Selective VPN</AssemblyTitle>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <ApplicationIcon>Assets\PsiSplit.ico</ApplicationIcon>
   </PropertyGroup>
 

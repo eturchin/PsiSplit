@@ -77,6 +77,7 @@ public partial class MainWindow : Window
 
         SitesList.ItemsSource = _sites;
         AppsList.ItemsSource = _apps;
+        CountryList.ItemsSource = _countries;
 
         LoadSettingsUi();
         if (!_preview)
@@ -104,7 +105,7 @@ public partial class MainWindow : Window
                 var node = args.OriginalSource as DependencyObject;
                 while (node is Visual)
                 {
-                    if (node is TabItem or ScrollBar) return;
+                    if (node is TabItem or ScrollBar || node == CountryList) return;
                     node = VisualTreeHelper.GetParent(node);
                 }
                 args.Handled = true;
@@ -112,6 +113,7 @@ public partial class MainWindow : Window
             PreviewKeyDown += (_, args) => args.Handled = true;
             ClampToWorkArea();
             DisablePreviewActions(this);
+            HomeScrollViewer.ScrollToTop();
             return;
         }
 
@@ -127,10 +129,11 @@ public partial class MainWindow : Window
             _watchdog.Start();
 
             _metricsTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            _metricsTimer.Tick += (_, _) => UpdateTrafficUi();
+            _metricsTimer.Tick += (_, _) => UpdateTrafficUi(sampleRates: true);
             _metricsTimer.Start();
 
             ClampToWorkArea();
+            HomeScrollViewer.ScrollToTop();
 
             _log.Info("PsiSplit ready. Local services started.");
             UpdateAllUi();
@@ -406,21 +409,17 @@ public partial class MainWindow : Window
 
     private void BuildController()
     {
-        if (_psiphon is not null)
-        {
-            _psiphon.StateChanged -= OnPsiphonStateChanged;
-            var old = _psiphon;
-            _ = old.DisposeAsync();
-        }
-
-        _psiphon = new PsiphonController(_log);
+        _psiphon = new PsiphonController(_log, egressRegion: _config.EgressRegion);
         _psiphon.StateChanged += OnPsiphonStateChanged;
+        _psiphon.ConnectionInfoChanged += OnConnectionInfoChanged;
     }
 
     private void OnPsiphonStateChanged(PsiphonState state)
     {
+        if (_exiting) return;
         Dispatcher.BeginInvoke(new Action(() =>
         {
+            if (state != PsiphonState.Connected) _vpnRates.Reset();
             if (state == PsiphonState.Connected && _psiphon is not null)
             {
                 var port = _psiphon.HttpProxyPort;
@@ -451,12 +450,7 @@ public partial class MainWindow : Window
 
     private async Task StartVpnAsync()
     {
-        if (_psiphon is null)
-        {
-            BuildController();
-        }
-
-        if (_psiphon is null || _busy)
+        if (_busy || _preview)
         {
             return;
         }
@@ -466,7 +460,8 @@ public partial class MainWindow : Window
 
         try
         {
-            await _psiphon.StartAsync();
+            await EnsureControllerSelectionAsync();
+            await _psiphon!.StartAsync();
             var port = _psiphon.HttpProxyPort;
 
             if (_fullProxy is not null)
@@ -1106,6 +1101,7 @@ public partial class MainWindow : Window
         AppsEmptyText.Visibility = _apps.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         UpdateAppButtons();
         UpdateTrafficUi();
+        UpdateCountryUi();
 
         if (_trayVpnItem is not null)
         {
@@ -1122,16 +1118,31 @@ public partial class MainWindow : Window
         LaunchAppButton.IsEnabled = hasSelection;
     }
 
-    private void UpdateTrafficUi()
+    private void UpdateTrafficUi(bool sampleRates = false)
     {
+        var now = _trafficClock.Elapsed;
+        if (_psiphon?.State == PsiphonState.Connected)
+        {
+            if (sampleRates)
+            {
+                var totals = _psiphon.TrafficTotals;
+                _vpnRates.Sample(totals.BytesSent, totals.BytesReceived, now);
+            }
+        }
+        else _vpnRates.Reset();
+        VpnDownloadSpeedText.Text = FormatSpeed(_vpnRates.Current.BytesReceivedPerSecond);
+        VpnUploadSpeedText.Text = FormatSpeed(_vpnRates.Current.BytesSentPerSecond);
+
         if (_fullProxy is not null)
         {
             var snapshot = _fullProxy.Metrics.Snapshot();
+            if (sampleRates) _fullRates.Sample(snapshot.BytesSent, snapshot.BytesReceived, now);
             FullTrafficText.Text = FormatTraffic(snapshot);
             FullConnectionsText.Text = FormatConnections(snapshot);
         }
         else
         {
+            _fullRates.Reset();
             FullTrafficText.Text = "↑ 0 B · ↓ 0 B";
             FullConnectionsText.Text = "0/0 active · VPN 0 · direct 0";
         }
@@ -1139,14 +1150,18 @@ public partial class MainWindow : Window
         if (_filteredProxy is not null)
         {
             var snapshot = _filteredProxy.Metrics.Snapshot();
+            if (sampleRates) _filteredRates.Sample(snapshot.BytesSent, snapshot.BytesReceived, now);
             FilteredTrafficText.Text = FormatTraffic(snapshot);
             FilteredConnectionsText.Text = FormatConnections(snapshot);
         }
         else
         {
+            _filteredRates.Reset();
             FilteredTrafficText.Text = "↑ 0 B · ↓ 0 B";
             FilteredConnectionsText.Text = "0/0 active · VPN 0 · direct 0";
         }
+        FullSpeedText.Text = FormatSpeeds(_fullRates.Current);
+        FilteredSpeedText.Text = FormatSpeeds(_filteredRates.Current);
     }
 
     private static string FormatTraffic(ProxyMetricsSnapshot snapshot)

@@ -55,8 +55,8 @@ Preview uses dummy app profiles with environment-variable paths and no live traf
 
 | Command suffix | Scope | System proxy changes |
 | --- | --- | --- |
-| `--local` | Domain matching, PAC JavaScript, defaults, notice parsing, bundle integrity, startup guards, and a fake HTTP upstream. | None. |
-| `--isolated` or no suffix | Local core checks plus real HTTP/SOCKS, Full/Filtered routing, detach/reattach, simultaneous cores, cancellation, and preservation checks. | None. |
+| `--local` | Domain matching, PAC JavaScript, defaults, country/traffic notices, rate calculations, preference/cache handling, bundle integrity, startup guards, and a fake HTTP upstream. | None. |
+| `--isolated` or no suffix | Local core checks plus real HTTP/SOCKS, country selection, speed notices, Full/Filtered routing, detach/reattach, simultaneous cores, changing a detached session's country, held notice readers, cancellation, and preservation checks. | None. |
 | `--system-proxy` | Explicit opt-in to the older system PAC, shell, and browser integration path. Refuses an active PsiSplit/Psiphon session. | Temporary PAC changes with restoration. |
 
 ```powershell

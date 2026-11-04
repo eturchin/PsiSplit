@@ -87,10 +87,16 @@ internal static class BundledEngineTests
             var firstRoot = Path.Combine(root, "first engine with spaces");
             var first = new PsiphonController(log, firstRoot);
             controllers.Add(first);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(170));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(7));
             await first.StartAsync(timeout.Token);
             testHandles.Add(Process.GetProcessById(first.ProcessId!.Value));
             check("Standalone bundled engine connects", first.State == PsiphonState.Connected, firstRoot);
+            check("Core confirms the requested exit country", first.ConnectedRegion == "NL", first.ConnectedRegion);
+            check("Core reports actual available countries", first.RegionReport.ReportedAtUtc is not null && !first.RegionReport.FromCache && first.RegionReport.Codes.Contains("NL"), $"{first.RegionReport.Codes.Count} reported countries");
+            var rateClock = Stopwatch.StartNew();
+            var realRates = new TransferRateSampler();
+            var beforeTraffic = first.TrafficTotals;
+            realRates.Sample(beforeTraffic.BytesSent, beforeTraffic.BytesReceived, rateClock.Elapsed);
             var initialPid = first.ProcessId;
             await first.StartAsync(timeout.Token);
             check("Repeated start keeps the connected owned process", first.ProcessId == initialPid, null);
@@ -102,6 +108,12 @@ internal static class BundledEngineTests
             }
             check("HTTPS through the bundled HTTP proxy", (await FetchAsync($"http://127.0.0.1:{first.HttpProxyPort}", "https://example.com/")).Contains("Example Domain"), null);
             check("HTTPS through the bundled SOCKS5 proxy", (await FetchAsync($"socks5://127.0.0.1:{first.SocksProxyPort}", "https://example.com/")).Contains("Example Domain"), null);
+            var trafficDeadline = Stopwatch.StartNew();
+            while (trafficDeadline.Elapsed < TimeSpan.FromSeconds(12) && first.TrafficTotals.BytesReceived <= beforeTraffic.BytesReceived)
+                await Task.Delay(200, timeout.Token);
+            var afterTraffic = first.TrafficTotals;
+            var speed = realRates.Sample(afterTraffic.BytesSent, afterTraffic.BytesReceived, rateClock.Elapsed);
+            check("Real tunneled traffic produces upload/download rates", speed.BytesReceivedPerSecond > 0 && speed.BytesSentPerSecond > 0, null);
 
             var matcher = new DomainMatcher(new[] { new SiteRule { Pattern = "example.com", Enabled = true } });
             await using (var full = new SmartProxyServer(0, TunnelMode.Full, first.HttpProxyPort, _ => true, () => first.State == PsiphonState.Connected, log))
@@ -144,16 +156,31 @@ internal static class BundledEngineTests
                 HttpPort = httpPort,
                 SocksPort = reattached.SocksProxyPort
             }));
-            var second = new PsiphonController(log, secondRoot);
+            var second = new PsiphonController(log, secondRoot, "DE");
             controllers.Add(second);
             await second.StartAsync(timeout.Token);
             testHandles.Add(Process.GetProcessById(second.ProcessId!.Value));
             check("Two independent cores coexist", second.ProcessId != pid && second.HttpProxyPort != httpPort, null);
+            check("A second country is applied without changing the first tunnel", second.ConnectedRegion == "DE" && reattached.ConnectedRegion == "NL", $"second={second.ConnectedRegion}, first={reattached.ConnectedRegion}");
             check("Stale session metadata cannot adopt an unrelated core", await PsiphonController.ProbeAsync(httpPort), null);
             await second.StopAsync();
             check("Stopping one core leaves the other working", await PsiphonController.ProbeAsync(httpPort), null);
-            await reattached.StopAsync();
-            check("Stop closes the owned proxy and clears ownership", !await PsiphonController.ProbeAsync(httpPort) && !reattached.CanStop && reattached.State == PsiphonState.Stopped, null);
+            await reattached.DisposeAsync();
+            using var oldSession = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(firstRoot, "session.json")));
+            var oldNoticeName = oldSession.RootElement.GetProperty("NoticeFile").GetString()!;
+            var oldNoticePath = Path.Combine(firstRoot, "notices", oldNoticeName);
+            // Simulate a log viewer/antivirus retaining the previous notice file.
+            using var heldNoticeReader = new FileStream(oldNoticePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var changed = new PsiphonController(log, firstRoot, "DE");
+            controllers.Add(changed);
+            await changed.StartAsync(timeout.Token);
+            testHandles.Add(Process.GetProcessById(changed.ProcessId!.Value));
+            check("Changing country does not reattach to the old-country session", changed.ProcessId != pid && testHandles[0].HasExited && changed.ConnectedRegion == "DE", null);
+            using var newSession = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(firstRoot, "session.json")));
+            check("Reconnect tolerates readers holding the previous notices", newSession.RootElement.GetProperty("NoticeFile").GetString() != oldNoticeName, null);
+            var changedPort = changed.HttpProxyPort;
+            await changed.StopAsync();
+            check("Stop closes the owned proxy and clears ownership", !await PsiphonController.ProbeAsync(changedPort) && !changed.CanStop && changed.State == PsiphonState.Stopped, null);
 
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var cancellingLog = new LogService(uiSink: entry =>

@@ -2,6 +2,7 @@
   "fullProxyPort": 18080,
   "filteredProxyPort": 18081,
   "pacPort": 18082,
+  "egressRegion": "",
   "startPsiphonOnLaunch": false,
   "applyPacOnStart": true,
   "stopPsiphonOnExit": true,

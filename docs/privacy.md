@@ -26,7 +26,7 @@ README commands are relative to the checkout. Example app paths use environment 
 
 ## Local information that can be sensitive
 
-Your actual app profile may contain executable paths and arguments. Logs can include requested hostnames, ports, application names, exception messages, or local paths. The proxy backup records previous Windows proxy settings; session files record process identity. The Psiphon engine keeps its own cache/notices and also communicates with the Psiphon network to establish a tunnel.
+Your actual app profile may contain executable paths, arguments, and an exit-country preference. Logs can include requested hostnames, ports, application names, exception messages, or local paths. The proxy backup records previous Windows proxy settings; session files record process identity and the current configuration. Country reports and their times are cached locally. Per-session core notices include country and transferred-byte updates. These runtime files are excluded from Git. The Psiphon engine also communicates with the Psiphon network to establish a tunnel.
 
 Do not attach a complete data directory to a public issue. Share a minimal, reviewed excerpt instead. The application has no repository upload step; version-control publication is a separate developer action.
 

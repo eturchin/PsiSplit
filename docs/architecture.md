@@ -13,6 +13,8 @@ PsiSplit is a Windows WPF shell around a bundled Psiphon Console Client and two 
 | `PsiphonController` | Starts the core without a window, reads notices, checks readiness, monitors health, and owns its lifecycle. |
 | `SmartProxyServer` | Accepts HTTP requests and CONNECT tunnels; selects the core or a direct TCP connection. |
 | `DomainMatcher` | Compiles enabled hostname rules for the filtered proxy. |
+| `PsiphonRegionCatalog` | Reads country codes from the bundled seed list for offline selection and resolves country names. |
+| `TransferRateSampler` | Calculates byte rates from cumulative counters using actual monotonic elapsed time. |
 | `PacGenerator` / `PacServer` | Generate and serve the browser routing script. |
 | `SystemProxyManager` | Saves, applies, watches, and restores the Windows PAC/proxy settings. |
 | `AppLauncher` / `ShellLauncher` | Launch proxy-aware programs with the selected local endpoint. |
@@ -26,12 +28,12 @@ PsiSplit is a Windows WPF shell around a bundled Psiphon Console Client and two 
 3. The Full, Filtered, and PAC services bind to loopback. Starting these services does not itself start a tunnel.
 4. **Start VPN** acquires the tunnel controller's private directory lease. A second controller cannot concurrently manage the same datastore.
 5. Embedded resources are verified and extracted into a directory named after the core's SHA-256. A new engine version receives a different directory instead of replacing a running binary.
-6. PsiSplit writes a core configuration pointing only at its private data directory. Both core proxy ports are set to `0`, asking Windows to allocate free ports. The default listen interface is loopback.
+6. PsiSplit writes a core configuration pointing only at its private data directory, with the selected `EgressRegion` (empty for Automatic). Both core proxy ports are set to `0`, asking Windows to allocate free ports. The default listen interface is loopback. Non-diagnostic byte-transfer notices and country reporting are enabled.
 7. PsiSplit starts the core directly with `--config`, `--serverList`, and `--notices`. It never launches the official GUI. GUI upgrade downloads and feedback upload are disabled in the generated configuration.
 8. JSON notices announce the HTTP/SOCKS ports and tunnel count. A positive tunnel count and a successful CONNECT request are both required before PsiSplit reports the connection as ready.
 9. The routing proxies receive the assigned upstream HTTP port. If configured, Site mode applies the PAC only after connection succeeds.
 
-The bundled seed list bootstraps discovery. Signed remote lists and the core's own protocol selection handle subsequent server choice; PsiSplit does not maintain a static list of live exit addresses or force one remote transport port. The shipped bootstrap selects the Netherlands exit region.
+The bundled seed list bootstraps discovery. Signed remote lists and the core's own protocol selection handle subsequent server choice; PsiSplit does not maintain a static list of live exit addresses or force one remote transport port. The initial preference is Netherlands for compatibility with earlier builds; the Servers tab can select another country or Automatic.
 
 ## HTTP, HTTPS, and routing
 
@@ -42,6 +44,14 @@ For HTTPS, PsiSplit forwards CONNECT and then relays the bidirectional byte stre
 If a route requires Psiphon and the core is not ready, the local routing proxy returns an HTTP error. Unlisted direct routes in the Filtered proxy do not require the tunnel.
 
 Counters track relayed bytes and selected routes at the PsiSplit proxy layer. They are not packet-level system accounting and do not include every byte of the core's encrypted network transport.
+
+The prominent VPN speed counters use the core's `BytesTransferred` notices, which contain 64-bit sent/received payload deltas. The controller accumulates them; a UI timer samples the totals once per second using a monotonic stopwatch. Additional UI refreshes do not consume samples. Delayed ticks use their actual elapsed duration, and idle or reset counters do not retain an old speed. Each local proxy also has its own rate sampler, so direct Filtered traffic remains distinguishable from tunneled payload.
+
+## Country selection
+
+`AvailableEgressRegions` supplies the live country candidates. The latest report is cached locally; before any report, country codes are decoded from the bundled seed records without exposing server credentials or requiring the live datastore. Cache/bundled entries are labeled as such. `ConnectedServerRegion` supplies the actual connected country independently of the requested preference.
+
+Saving a country updates the profile without modifying the active controller. An explicit start/reconnect creates a controller for the saved choice. Detached sessions include a configuration identity, so changing the requested country cannot accidentally adopt a tunnel established for another country or an older core configuration lacking transfer notices.
 
 ## PAC Site mode
 
@@ -67,7 +77,9 @@ The controller moves through `Stopped`, `Starting`, `Connected`, `Stopping`, and
 
 Stop targets the retained process handle for the owned core. The controller does not discover ownership from process names, collect every newly appearing core PID, or kill another running Psiphon instance. A startup error or cancellation cleans up only the process created or verified by that controller.
 
-If disconnect-on-exit is disabled, disposal detaches from the owned core. A saved session records its PID, creation time, exact private executable path, and proxy ports. A later controller verifies all of those identity boundaries before adoption. A recycled PID, a process at another path, or copied session metadata is not enough to claim ownership. A previously bundled version can be retired before a new version opens the private datastore.
+If disconnect-on-exit is disabled, disposal detaches from the owned core. A saved session records its PID, creation time, exact private executable path, proxy ports, configuration identity, and notice filename. A later controller verifies those identity boundaries before adoption. A recycled PID, a process at another path, or copied session metadata is not enough to claim ownership. A previously bundled version can be retired before a new version opens the private datastore.
+
+Each launch gets a unique notice file in the private `notices/` directory. Reconnect does not truncate a file retained by a previous reader or antivirus. Stop attempts to remove that owned stream after process exit; an unavailable old file does not prevent the next launch. Detach leaves its stream available for reattachment.
 
 ## Files and isolation
 
