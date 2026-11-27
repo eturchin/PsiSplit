@@ -41,6 +41,8 @@ The Full proxy sends each accepted request through the core's local HTTP proxy. 
 
 For HTTPS, PsiSplit forwards CONNECT and then relays the bidirectional byte stream. It does not terminate TLS or install a trust certificate. For ordinary HTTP, it rewrites the request target for the chosen upstream and relays the response. The proxy is intentionally small and generally uses one request per client connection rather than implementing a full general-purpose HTTP cache or connection pool.
 
+Relayed streams have no artificial lifetime, so long downloads and WebSockets are not cut off after a fixed interval. Each direction uses a pooled 64 KB buffer, and keepalive is enabled on accepted and direct upstream sockets. Successful per-request routing is not written to the application log; only warnings and failures are logged to avoid synchronous log I/O on every connection.
+
 If a route requires Psiphon and the core is not ready, the local routing proxy returns an HTTP error. Unlisted direct routes in the Filtered proxy do not require the tunnel.
 
 Counters track relayed bytes and selected routes at the PsiSplit proxy layer. They are not packet-level system accounting and do not include every byte of the core's encrypted network transport.
@@ -73,7 +75,9 @@ PsiSplit saves the previous proxy snapshot before applying Site mode and restore
 
 ## Lifecycle, retries, and ownership
 
-The controller moves through `Stopped`, `Starting`, `Connected`, `Stopping`, and `Failed`. Startup has a bounded connection timeout. The health loop checks the tunnel periodically and reports failure after repeated unsuccessful probes. The UI disables Site mode when a failure is detected.
+The controller moves through `Stopped`, `Starting`, `Connected`, `Reconnecting`, `Stopping`, and `Failed`. Startup has a bounded connection timeout. Once connected, a five-second health loop checks the owned process and its loopback listener with a local TCP connect instead of a remote site probe. A lost relay enters `Reconnecting` for up to 75 seconds while the core rebuilds it; an unresponsive local listener is tolerated for 15 seconds, and an exited process fails immediately. The UI keeps Site mode applied during recovery.
+
+After a terminal failure, the app can restart the tunnel with a capped 3/8/15/30/60-second backoff. This behavior is controlled by the `AutoReconnect` setting and is enabled by default. An explicit **Stop** cancels pending retries; an explicit **Start** replaces them.
 
 Stop targets the retained process handle for the owned core. The controller does not discover ownership from process names, collect every newly appearing core PID, or kill another running Psiphon instance. A startup error or cancellation cleans up only the process created or verified by that controller.
 

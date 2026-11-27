@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>CodexProxy</AssemblyName>
+    <Product>Codex Proxy Launcher</Product>
+    <Version>1.3.0</Version>
+    <ApplicationIcon>..\PsiSplit.App\Assets\PsiSplit.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PsiSplit.Core\PsiSplit.Core.csproj" />
+  </ItemGroup>
+</Project>

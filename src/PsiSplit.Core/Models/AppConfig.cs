@@ -25,6 +25,9 @@ public sealed class AppConfig
     public bool StopPsiphonOnExit { get; set; } = true;
     public bool MinimizeToTray { get; set; } = true;
 
+    /// <summary>Restart the tunnel automatically after an unexpected disconnect.</summary>
+    public bool AutoReconnect { get; set; } = true;
+
     /// <summary>When true, cmd/PowerShell launched from the app use the site list instead of full tunnel.</summary>
     public bool TunnelShellsThroughSiteFilter { get; set; }
 
@@ -74,6 +77,7 @@ public sealed class AppConfig
             ApplyPacOnStart = ApplyPacOnStart,
             StopPsiphonOnExit = StopPsiphonOnExit,
             MinimizeToTray = MinimizeToTray,
+            AutoReconnect = AutoReconnect,
             TunnelShellsThroughSiteFilter = TunnelShellsThroughSiteFilter,
             Sites = Sites.Select(s => new SiteRule { Pattern = s.Pattern, Enabled = s.Enabled }).ToList(),
             Apps = Apps.Select(a => new AppProfile

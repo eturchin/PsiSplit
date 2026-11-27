@@ -33,6 +33,13 @@ internal static class ConnectionFeatureTests
         config.Normalize();
         check("Invalid saved country codes fall back safely", config.EgressRegion == "NL", null);
 
+        var reconnectDefault = JsonSerializer.Deserialize<AppConfig>("{}")!;
+        check("Auto-reconnect is enabled for existing profiles", reconnectDefault.AutoReconnect, null);
+        reconnectDefault.AutoReconnect = false;
+        check("Auto-reconnect preference is cloned", !reconnectDefault.Clone().AutoReconnect, null);
+        store.Save(reconnectDefault);
+        check("Auto-reconnect preference persists", !store.Load().AutoReconnect, null);
+
         var automatic = PsiphonBundle.CreateConfig(Path.Combine(root, "automatic"), "");
         var germany = PsiphonBundle.CreateConfig(Path.Combine(root, "germany"), "DE");
         check("Automatic selection overrides the bundled exit region", automatic["EgressRegion"]!.GetValue<string>() == "", null);

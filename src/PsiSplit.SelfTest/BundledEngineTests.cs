@@ -182,6 +182,19 @@ internal static class BundledEngineTests
             await changed.StopAsync();
             check("Stop closes the owned proxy and clears ownership", !await PsiphonController.ProbeAsync(changedPort) && !changed.CanStop && changed.State == PsiphonState.Stopped, null);
 
+            var health = new PsiphonController(log, Path.Combine(root, "health-monitor"));
+            controllers.Add(health);
+            await health.StartAsync(timeout.Token);
+            var healthHandle = Process.GetProcessById(health.ProcessId!.Value);
+            testHandles.Add(healthHandle);
+            healthHandle.Kill();
+            await healthHandle.WaitForExitAsync();
+            var failureDeadline = Stopwatch.StartNew();
+            while (failureDeadline.Elapsed < TimeSpan.FromSeconds(20) && health.State != PsiphonState.Failed)
+                await Task.Delay(250, timeout.Token);
+            check("A crashed core is reported as failed without a remote probe", health.State == PsiphonState.Failed, health.State.ToString());
+            await health.StopAsync();
+
             using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var cancellingLog = new LogService(uiSink: entry =>
             {

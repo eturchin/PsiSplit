@@ -10,6 +10,7 @@
 *.dmp
 *.cache
 *.zip
+*.lnk
 
 # IDE and machine-specific settings
 /.idea/

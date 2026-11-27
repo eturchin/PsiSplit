@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -55,6 +56,9 @@ public partial class MainWindow : Window
     private bool _busy;
     private bool _exiting;
     private bool _trayHintShown;
+    private CancellationTokenSource? _reconnectCts;
+    private bool _vpnEverConnected;
+    private bool _manualStop;
 
     public MainWindow() : this(new ConfigStore()) { }
 
@@ -243,6 +247,8 @@ public partial class MainWindow : Window
         }
 
         _exiting = true;
+        _manualStop = true;
+        CancelAutoReconnect();
         _watchdog?.Stop();
         _metricsTimer?.Stop();
 
@@ -317,7 +323,7 @@ public partial class MainWindow : Window
 
     private void StartLocalServers()
     {
-        var upstream = _psiphon?.State == PsiphonState.Connected
+        var upstream = _psiphon?.State is PsiphonState.Connected or PsiphonState.Reconnecting
             ? _psiphon.HttpProxyPort
             : 0;
 
@@ -401,7 +407,7 @@ public partial class MainWindow : Window
         => PacGenerator.Generate(_sites, _config.FilteredProxyPort);
 
     private bool IsUpstreamReady()
-        => _psiphon?.State == PsiphonState.Connected;
+        => _psiphon?.State is PsiphonState.Connected or PsiphonState.Reconnecting;
 
     // ------------------------------------------------------------------
     // Psiphon
@@ -419,9 +425,11 @@ public partial class MainWindow : Window
         if (_exiting) return;
         Dispatcher.BeginInvoke(new Action(() =>
         {
+            if (_exiting) return;
             if (state != PsiphonState.Connected) _vpnRates.Reset();
             if (state == PsiphonState.Connected && _psiphon is not null)
             {
+                _vpnEverConnected = true;
                 var port = _psiphon.HttpProxyPort;
                 if (_fullProxy is not null)
                 {
@@ -438,23 +446,96 @@ public partial class MainWindow : Window
                     EnableSiteMode();
                 }
             }
-            else if (state == PsiphonState.Failed && _siteMode)
+            else if (state == PsiphonState.Failed)
             {
-                DisableSiteMode();
-                _log.Warn("Site mode disabled: connection to Psiphon lost.");
+                var willRetry = _config.AutoReconnect && _vpnEverConnected && !_manualStop;
+                if (!willRetry && _siteMode)
+                {
+                    DisableSiteMode();
+                    _log.Warn("Site mode disabled: connection to Psiphon lost.");
+                }
+                if (willRetry)
+                {
+                    ArmAutoReconnect();
+                }
             }
 
             UpdateAllUi();
         }));
     }
 
+    private void ArmAutoReconnect()
+    {
+        if (!_config.AutoReconnect || _exiting || _manualStop || !_vpnEverConnected) return;
+        if (_reconnectCts is not null) return;
+        var cts = new CancellationTokenSource();
+        _reconnectCts = cts;
+        _ = AutoReconnectAsync(cts);
+    }
+
+    private void CancelAutoReconnect()
+    {
+        var cts = _reconnectCts;
+        _reconnectCts = null;
+        if (cts is null) return;
+        try { cts.Cancel(); }
+        catch (ObjectDisposedException) { }
+        // The reconnect loop disposes its own token source in finally.
+    }
+
+    /// <summary>
+    /// Retries with a capped backoff. Site mode intentionally stays applied
+    /// during the outage so the listed sites resume without user action.
+    /// </summary>
+    private async Task AutoReconnectAsync(CancellationTokenSource cts)
+    {
+        var token = cts.Token;
+        int[] backoffSeconds = { 3, 8, 15, 30, 60 };
+        try
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                var delay = TimeSpan.FromSeconds(backoffSeconds[Math.Min(attempt, backoffSeconds.Length - 1)]);
+                _log.Warn($"VPN connection lost. Auto-reconnect in {delay.TotalSeconds:0} s (attempt {attempt + 1}).");
+                await Task.Delay(delay, token);
+                if (_exiting || _manualStop || token.IsCancellationRequested) return;
+                if (_psiphon?.State is not (PsiphonState.Failed or PsiphonState.Stopped))
+                {
+                    return; // A manual start or a recovered tunnel won the race.
+                }
+
+                _log.Info("Auto-reconnect: restarting the tunnel.");
+                try
+                {
+                    await EnsureControllerSelectionAsync();
+                    await _psiphon!.StartAsync(token);
+                    _log.Info($"Auto-reconnect succeeded. Psiphon local HTTP proxy: 127.0.0.1:{_psiphon.HttpProxyPort}.");
+                    return;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+                catch (Exception exception)
+                {
+                    _log.Warn("Auto-reconnect attempt failed: " + exception.Message);
+                }
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_reconnectCts, cts)) _reconnectCts = null;
+            cts.Dispose();
+        }
+    }
+
     private async Task StartVpnAsync()
     {
-        if (_busy || _preview)
+        if (_busy || _preview || _psiphon?.State == PsiphonState.Starting)
         {
             return;
         }
 
+        // An explicit start replaces any pending automatic retry.
+        CancelAutoReconnect();
+        _manualStop = false;
         _busy = true;
         UpdateAllUi();
 
@@ -484,9 +565,14 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             _log.Error("Failed to start VPN", exception);
+            var message = DescribeVpnStartError(exception);
+            if (!string.IsNullOrWhiteSpace(_psiphon?.LastError))
+            {
+                message += Environment.NewLine + Environment.NewLine + "Engine: " + _psiphon.LastError;
+            }
             MessageBox.Show(
                 this,
-                DescribeVpnStartError(exception),
+                message,
                 "PsiSplit — VPN not started",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
@@ -527,6 +613,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        // A manual stop is final: cancel pending retries and keep them from
+        // restarting the tunnel while the user wanted it off.
+        CancelAutoReconnect();
+        _manualStop = true;
+        _vpnEverConnected = false;
         _busy = true;
         UpdateAllUi();
 
@@ -554,7 +645,12 @@ public partial class MainWindow : Window
     private async Task ToggleVpnAsync()
     {
         var state = _psiphon?.State ?? PsiphonState.Stopped;
-        if (state == PsiphonState.Connected)
+        if (state is PsiphonState.Starting or PsiphonState.Stopping)
+        {
+            return;
+        }
+
+        if (state is PsiphonState.Connected or PsiphonState.Reconnecting)
         {
             await StopVpnAsync();
         }
@@ -893,6 +989,7 @@ public partial class MainWindow : Window
         StartOnLaunchCheck.IsChecked = _config.StartPsiphonOnLaunch;
         ApplyPacCheck.IsChecked = _config.ApplyPacOnStart;
         StopOnExitCheck.IsChecked = _config.StopPsiphonOnExit;
+        AutoReconnectCheck.IsChecked = _config.AutoReconnect;
         MinimizeTrayCheck.IsChecked = _config.MinimizeToTray;
         ShellsFilteredCheck.IsChecked = _config.TunnelShellsThroughSiteFilter;
 
@@ -925,16 +1022,26 @@ public partial class MainWindow : Window
         _config.StartPsiphonOnLaunch = StartOnLaunchCheck.IsChecked == true;
         _config.ApplyPacOnStart = ApplyPacCheck.IsChecked == true;
         _config.StopPsiphonOnExit = StopOnExitCheck.IsChecked == true;
+        _config.AutoReconnect = AutoReconnectCheck.IsChecked == true;
         _config.MinimizeToTray = MinimizeTrayCheck.IsChecked == true;
         _config.TunnelShellsThroughSiteFilter = ShellsFilteredCheck.IsChecked == true;
 
         PersistConfig();
         SettingsStatusText.Text = "Settings saved.";
 
+        if (!_config.AutoReconnect)
+        {
+            CancelAutoReconnect();
+        }
+        else if (_psiphon?.State == PsiphonState.Failed)
+        {
+            ArmAutoReconnect();
+        }
+
         if (portsChanged)
         {
             var state = _psiphon?.State ?? PsiphonState.Stopped;
-            if (state is PsiphonState.Connected or PsiphonState.Starting or PsiphonState.Stopping)
+            if (state is PsiphonState.Connected or PsiphonState.Reconnecting or PsiphonState.Starting or PsiphonState.Stopping)
             {
                 SettingsStatusText.Text += " New ports will apply after the VPN stops and PsiSplit restarts.";
             }
@@ -1005,11 +1112,14 @@ public partial class MainWindow : Window
     private void UpdateAllUi()
     {
         var state = _psiphon?.State ?? PsiphonState.Stopped;
+        var autoRetryPending = _reconnectCts is not null && state == PsiphonState.Failed;
 
         VpnHeadline.Text = state switch
         {
             PsiphonState.Starting => "Connecting…",
             PsiphonState.Connected => "VPN connected",
+            PsiphonState.Reconnecting => "Reconnecting…",
+            PsiphonState.Failed when autoRetryPending => "Waiting to reconnect…",
             PsiphonState.Stopping => "Disconnecting…",
             PsiphonState.Failed => "VPN not connected",
             _ => "VPN off"
@@ -1022,28 +1132,40 @@ public partial class MainWindow : Window
                 "The tunnel is ready. The built-in Psiphon engine is running without a separate application window.",
             PsiphonState.Connected =>
                 "The tunnel is ready. Psiphon was started externally — PsiSplit will not stop it.",
+            PsiphonState.Reconnecting =>
+                "The tunnel was interrupted. If Site mode is on, it stays applied while the built-in engine restores the relay; traffic may pause briefly.",
+            PsiphonState.Failed when autoRetryPending =>
+                "The connection was lost. The tunnel will restart automatically; use Cancel retry to stay disconnected.",
             PsiphonState.Stopping => "Stopping Psiphon and restoring the system proxy.",
             PsiphonState.Failed => "The connection was lost or could not be established. Check your internet connection and the log.",
             _ => "Psiphon is not running. System proxy settings are unchanged."
         };
 
-        StartProgress.Visibility = state is PsiphonState.Starting or PsiphonState.Stopping
+        StartProgress.Visibility = autoRetryPending ||
+            state is PsiphonState.Starting or PsiphonState.Reconnecting or PsiphonState.Stopping
             ? Visibility.Visible
             : Visibility.Collapsed;
 
         var isConnected = state == PsiphonState.Connected;
+        var hasTunnel = state is PsiphonState.Connected or PsiphonState.Reconnecting;
+        var showStop = hasTunnel || autoRetryPending;
         var isTransitioning = state is PsiphonState.Starting or PsiphonState.Stopping;
 
-        StartButton.Visibility = isConnected ? Visibility.Collapsed : Visibility.Visible;
-        StopButton.Visibility = isConnected ? Visibility.Visible : Visibility.Collapsed;
+        StartButton.Visibility = hasTunnel ? Visibility.Collapsed : Visibility.Visible;
+        StopButton.Visibility = showStop ? Visibility.Visible : Visibility.Collapsed;
         StartButton.IsEnabled = !_busy && !isTransitioning;
-        StartButton.Content = state == PsiphonState.Starting
-            ? "Connecting…"
-            : state == PsiphonState.Failed ? "Retry" : "Start VPN";
-        StopButton.IsEnabled = !_busy && isConnected && (_psiphon?.CanStop ?? false);
-        StopButton.ToolTip = isConnected && !(_psiphon?.CanStop ?? false)
-            ? "Psiphon was started externally — stop it manually."
-            : "Stop the VPN and restore the system proxy.";
+        StartButton.Content = autoRetryPending
+            ? "Retry now"
+            : state == PsiphonState.Starting
+                ? "Connecting…"
+                : state == PsiphonState.Failed ? "Retry" : "Start VPN";
+        StopButton.Content = autoRetryPending ? "Cancel retry" : "Stop";
+        StopButton.IsEnabled = !_busy && (autoRetryPending || (hasTunnel && (_psiphon?.CanStop ?? false)));
+        StopButton.ToolTip = autoRetryPending
+            ? "Cancel automatic reconnect and stay disconnected."
+            : hasTunnel && !(_psiphon?.CanStop ?? false)
+                ? "Psiphon was started externally — stop it manually."
+                : "Stop the VPN and restore the system proxy.";
 
         SiteModeButton.IsEnabled = !_busy && (_siteMode || isConnected);
         SiteModeButton.Content = _siteMode ? "Site mode: on" : "Site mode: off";
@@ -1058,7 +1180,8 @@ public partial class MainWindow : Window
         var accent = state switch
         {
             PsiphonState.Connected => (Brush)FindResource("GreenBrush"),
-            PsiphonState.Starting or PsiphonState.Stopping => (Brush)FindResource("AmberBrush"),
+            PsiphonState.Starting or PsiphonState.Reconnecting or PsiphonState.Stopping => (Brush)FindResource("AmberBrush"),
+            PsiphonState.Failed when autoRetryPending => (Brush)FindResource("AmberBrush"),
             PsiphonState.Failed => (Brush)FindResource("RedBrush"),
             _ => (Brush)FindResource("MutedBrush")
         };
@@ -1069,7 +1192,9 @@ public partial class MainWindow : Window
         {
             PsiphonState.Starting => "connecting",
             PsiphonState.Connected => "connected",
+            PsiphonState.Reconnecting => "reconnecting",
             PsiphonState.Stopping => "disconnecting",
+            PsiphonState.Failed when autoRetryPending => "reconnecting",
             PsiphonState.Failed => "error",
             _ => "off"
         };
@@ -1077,7 +1202,8 @@ public partial class MainWindow : Window
         (StatusPill.Background, StatusPill.BorderBrush) = state switch
         {
             PsiphonState.Connected => (GreenTint, GreenBorder),
-            PsiphonState.Starting or PsiphonState.Stopping => (AmberTint, AmberBorder),
+            PsiphonState.Starting or PsiphonState.Reconnecting or PsiphonState.Stopping => (AmberTint, AmberBorder),
+            PsiphonState.Failed when autoRetryPending => (AmberTint, AmberBorder),
             PsiphonState.Failed => (RedTint, RedBorder),
             _ => (NeutralTint, NeutralBorder)
         };
@@ -1105,8 +1231,9 @@ public partial class MainWindow : Window
 
         if (_trayVpnItem is not null)
         {
-            _trayVpnItem.Text = state == PsiphonState.Connected ? "Stop VPN" : "Start VPN";
-            _trayVpnItem.Enabled = !_busy && (state != PsiphonState.Connected || (_psiphon?.CanStop ?? false));
+            _trayVpnItem.Text = state is PsiphonState.Connected or PsiphonState.Reconnecting ? "Stop VPN" : "Start VPN";
+            _trayVpnItem.Enabled = !_busy &&
+                (state is not (PsiphonState.Connected or PsiphonState.Reconnecting) || (_psiphon?.CanStop ?? false));
         }
     }
 
@@ -1196,11 +1323,13 @@ public partial class MainWindow : Window
         return value.ToString(format, CultureInfo.InvariantCulture) + " " + units[unit];
     }
 
-    private static string StateLabel(PsiphonState state) => state switch
+    private string StateLabel(PsiphonState state) => state switch
     {
         PsiphonState.Starting => "connecting",
         PsiphonState.Connected => "connected",
+        PsiphonState.Reconnecting => "reconnecting",
         PsiphonState.Stopping => "disconnecting",
+        PsiphonState.Failed when _reconnectCts is not null => "reconnecting",
         PsiphonState.Failed => "error",
         _ => "not running"
     };

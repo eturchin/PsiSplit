@@ -6,6 +6,7 @@
   "startPsiphonOnLaunch": false,
   "applyPacOnStart": true,
   "stopPsiphonOnExit": true,
+  "autoReconnect": true,
   "minimizeToTray": true,
   "tunnelShellsThroughSiteFilter": false,
   "sites": [

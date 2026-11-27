@@ -31,9 +31,17 @@ jobs:
         run: dotnet run --project src/PsiSplit.SelfTest -c Release --no-build -- --local
       - name: Publish standalone Windows app
         run: ./publish.ps1 -NoRestore
+      - name: Publish optional Codex launcher
+        run: ./publish-codex-launcher.ps1 -NoRestore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PsiSplit-win-x64
           path: dist/standalone/*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: CodexProxy-win-x64
+          path: dist/codex-proxy/*
           if-no-files-found: error
           retention-days: 14

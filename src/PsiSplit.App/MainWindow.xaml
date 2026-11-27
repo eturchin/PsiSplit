@@ -645,6 +645,7 @@
                                 <CheckBox x:Name="StartOnLaunchCheck" Content="Connect VPN when PsiSplit starts" Margin="0,12,0,0"/>
                                 <CheckBox x:Name="ApplyPacCheck" Content="Enable Site mode automatically after the VPN connects" Margin="0,10,0,0"/>
                                 <CheckBox x:Name="StopOnExitCheck" Content="Disconnect VPN when PsiSplit exits" Margin="0,10,0,0"/>
+                                <CheckBox x:Name="AutoReconnectCheck" Content="Reconnect automatically after a connection loss" Margin="0,10,0,0"/>
                                 <CheckBox x:Name="MinimizeTrayCheck" Content="Minimize to tray on close" Margin="0,10,0,0"/>
                                 <CheckBox x:Name="ShellsFilteredCheck" Content="CMD / PowerShell: listed sites only (otherwise all traffic)" Margin="0,10,0,0"/>
                             </StackPanel>

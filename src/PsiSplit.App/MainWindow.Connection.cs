@@ -74,9 +74,13 @@ public partial class MainWindow
             ? $"{(report.FromCache ? "Last known list" : "Reported by Psiphon")} · {reported.ToLocalTime():yyyy-MM-dd HH:mm}"
             : "Bundled list · connect to discover the current countries.";
         var region = _psiphon?.ConnectedRegion ?? "";
-        var connectedText = _psiphon?.State == PsiphonState.Connected
-            ? region.Length == 2 ? CountryLabel(region) : "Detecting exit country…"
-            : _psiphon?.State == PsiphonState.Starting ? "Connecting…" : "Not connected";
+        var connectedText = _psiphon?.State switch
+        {
+            PsiphonState.Connected => region.Length == 2 ? CountryLabel(region) : "Detecting exit country…",
+            PsiphonState.Starting => "Connecting…",
+            PsiphonState.Reconnecting => "Reconnecting…",
+            _ => "Not connected"
+        };
         ConnectedCountryText.Text = connectedText;
         HomeCountryText.Text = connectedText;
         SavedCountryText.Text = CountryLabel(_config.EgressRegion);
@@ -86,7 +90,7 @@ public partial class MainWindow
     private void UpdateCountryButtons()
     {
         var selected = CountryList.SelectedItem as CountryChoice;
-        var transitioning = _psiphon?.State is PsiphonState.Starting or PsiphonState.Stopping;
+        var transitioning = _psiphon?.State is PsiphonState.Starting or PsiphonState.Reconnecting or PsiphonState.Stopping;
         SaveCountryButton.IsEnabled = !_preview && !_busy && selected is not null && selected.Code != _config.EgressRegion;
         ConnectCountryButton.IsEnabled = !_preview && !_busy && !transitioning && selected is not null;
         ConnectCountryButton.Content = _psiphon?.State == PsiphonState.Connected

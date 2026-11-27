@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace PsiSplit.Core.Services;
 
-public enum PsiphonState { Stopped, Starting, Connected, Stopping, Failed }
+public enum PsiphonState { Stopped, Starting, Connected, Reconnecting, Stopping, Failed }
 
 /// <summary>
 /// Runs the bundled tunnel core without psiphon3.exe, its registry or datastore.
@@ -14,15 +14,25 @@ public enum PsiphonState { Stopped, Starting, Connected, Stopping, Failed }
 /// </summary>
 public sealed class PsiphonController : IAsyncDisposable
 {
+    // A tunnel loss is normal for a mobile-friendly engine: the core usually
+    // restores its relay within seconds. Keep the session alive while it does,
+    // and fail only when recovery has clearly stopped making progress.
+    private static readonly TimeSpan HealthInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TunnelLossDebounce = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TunnelLossGrace = TimeSpan.FromSeconds(75);
+    private static readonly TimeSpan ListenerLossGrace = TimeSpan.FromSeconds(15);
+
     private readonly LogService _log;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly object _stateLock = new();
+    private readonly Action<Process>? _processStarted;
     private Process? _process;
     private string? _processExecutable;
     private FileStream? _lease;
     private int _httpPort;
     private int _socksPort;
     private int _tunnelCount;
-    private string _lastError = "";
+    private volatile string _lastError = "";
     private long _bytesSent;
     private long _bytesReceived;
     private string _connectedRegion = "";
@@ -36,9 +46,10 @@ public sealed class PsiphonController : IAsyncDisposable
     private bool _disposed;
 
     public PsiphonController(LogService log, string? runtimeDirectory = null,
-        string egressRegion = PsiphonRegionCatalog.DefaultRegion)
+        string egressRegion = PsiphonRegionCatalog.DefaultRegion, Action<Process>? processStarted = null)
     {
         _log = log;
+        _processStarted = processStarted;
         RuntimeDirectory = Path.GetFullPath(runtimeDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PsiSplit", "Tunnel"));
         RequestedEgressRegion = PsiphonRegionCatalog.NormalizeCode(egressRegion)
@@ -55,6 +66,7 @@ public sealed class PsiphonController : IAsyncDisposable
     public bool CanStop => _process is not null;
     public string RequestedEgressRegion { get; }
     public string ConnectedRegion => Volatile.Read(ref _connectedRegion);
+    public string LastError => _lastError;
     public EgressRegionReport RegionReport => Volatile.Read(ref _regionReport);
     public TransferTotals TrafficTotals => new(Interlocked.Read(ref _bytesSent), Interlocked.Read(ref _bytesReceived));
     private string SettingsKey => "traffic-regions-v1:" + RequestedEgressRegion;
@@ -92,7 +104,9 @@ public sealed class PsiphonController : IAsyncDisposable
                 {
                     _log.Info($"Reattached to the PsiSplit tunnel core, PID {_process!.Id}.");
                     SetState(PsiphonState.Connected);
-                    StartWatching(readExistingNotices: false);
+                    // Replay the current notice file so a detached core restores
+                    // its tunnel counter, exit region and traffic totals.
+                    StartWatching(readExistingNotices: true);
                     return;
                 }
                 await KillOwnedProcessAsync();
@@ -129,6 +143,14 @@ public sealed class PsiphonController : IAsyncDisposable
             _processExecutable = executable;
             _process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Windows could not start the bundled tunnel core.");
+            if (_processStarted is not null)
+            {
+                try { _processStarted(_process); }
+                catch (Exception exception)
+                {
+                    _log.Warn("The tunnel core could not be registered for lifetime cleanup: " + exception.Message);
+                }
+            }
             SaveSession();
             _log.Info($"Bundled Psiphon tunnel core started without a window, PID {_process.Id}.");
             StartWatching(readExistingNotices: true);
@@ -166,12 +188,13 @@ public sealed class PsiphonController : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             SetState(PsiphonState.Stopping);
             await StopWatchingAsync();
-            await KillOwnedProcessAsync();
+            var stopped = await KillOwnedProcessAsync();
             ReleaseLease();
-            SetState(PsiphonState.Stopped);
+            SetState(stopped ? PsiphonState.Stopped : PsiphonState.Failed);
         }
-        catch
+        catch (Exception exception)
         {
+            _log.Error("Failed to stop the tunnel core", exception);
             SetState(PsiphonState.Failed);
             throw;
         }
@@ -225,9 +248,19 @@ public sealed class PsiphonController : IAsyncDisposable
     private async Task StopWatchingAsync()
     {
         if (_watchCts is null) return;
-        await _watchCts.CancelAsync();
-        try { await Task.WhenAll(_noticeTask ?? Task.CompletedTask, _healthTask ?? Task.CompletedTask); }
+        var noticeTask = _noticeTask;
+        var healthTask = _healthTask;
+        try
+        {
+            await _watchCts.CancelAsync();
+            await Task.WhenAll(noticeTask ?? Task.CompletedTask, healthTask ?? Task.CompletedTask);
+        }
         catch (OperationCanceledException) { }
+        catch (Exception exception)
+        {
+            // A monitor failure must never block shutdown.
+            _log.Warn("Stopping tunnel monitors: " + exception.Message);
+        }
         finally
         {
             _watchCts.Dispose();
@@ -355,38 +388,119 @@ public sealed class PsiphonController : IAsyncDisposable
 
     private async Task HealthLoopAsync(CancellationToken cancellationToken)
     {
-        var failures = 0;
+        DateTimeOffset? listenerDownSince = null;
+        DateTimeOffset? tunnelDownSince = null;
         try
         {
             while (true)
             {
-                await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
-                if (_state != PsiphonState.Connected) continue;
-                if (_process is { HasExited: false } && await ProbeAsync(HttpProxyPort, cancellationToken))
+                await Task.Delay(HealthInterval, cancellationToken);
+                var state = _state;
+                if (state is not (PsiphonState.Connected or PsiphonState.Reconnecting)) continue;
+
+                var process = Volatile.Read(ref _process);
+                if (process is null || HasExited(process))
                 {
-                    failures = 0;
+                    // A killed or crashed core will never recover on its own.
+                    _log.Error("Tunnel core exited unexpectedly. Click Start VPN to reconnect.");
+                    SetState(PsiphonState.Failed);
+                    break;
+                }
+
+                var now = DateTimeOffset.UtcNow;
+                if (!await IsListenerAliveAsync(HttpProxyPort, cancellationToken))
+                {
+                    listenerDownSince ??= now;
+                    var downFor = now - listenerDownSince.Value;
+                    if (state == PsiphonState.Connected)
+                    {
+                        _log.Warn("Tunnel core is not accepting local connections; waiting for it to recover.");
+                        SetState(PsiphonState.Reconnecting);
+                    }
+                    if (downFor >= ListenerLossGrace)
+                    {
+                        _log.Error("Tunnel connection lost: the local proxy stopped responding. Click Start VPN to reconnect.");
+                        SetState(PsiphonState.Failed);
+                        break;
+                    }
                     continue;
                 }
-                _log.Warn($"Tunnel core is not responding ({++failures}/2).");
-                if (failures >= 2)
+
+                listenerDownSince = null;
+
+                if (Volatile.Read(ref _tunnelCount) > 0)
                 {
-                    _log.Error("Tunnel connection lost. Click Start VPN to reconnect.");
+                    tunnelDownSince = null;
+                    if (state == PsiphonState.Reconnecting)
+                    {
+                        _log.Info("Tunnel connection restored.");
+                        SetState(PsiphonState.Connected);
+                    }
+                    continue;
+                }
+
+                // The listener is alive but the relay is gone. Psiphon normally
+                // rebuilds it in a few seconds; give it a generous grace period.
+                tunnelDownSince ??= now;
+                var tunnelDownFor = now - tunnelDownSince.Value;
+                if (state == PsiphonState.Connected && tunnelDownFor >= TunnelLossDebounce)
+                {
+                    _log.Warn("Tunnel relay is down; waiting for the core to reconnect.");
+                    SetState(PsiphonState.Reconnecting);
+                }
+                if (tunnelDownFor >= TunnelLossGrace)
+                {
+                    _log.Error("Tunnel connection was not restored in time. Click Start VPN to reconnect.");
                     SetState(PsiphonState.Failed);
                     break;
                 }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            _log.Error("Tunnel health monitor stopped unexpectedly", exception);
+            SetState(PsiphonState.Failed);
+        }
+    }
+
+    /// <summary>
+    /// Checks only that the core's loopback listener accepts a socket. Unlike
+    /// <see cref="ProbeAsync"/> this never depends on a remote site or the relay,
+    /// so a temporary egress outage is not mistaken for a dead process.
+    /// </summary>
+    private static async Task<bool> IsListenerAliveAsync(int port, CancellationToken cancellationToken)
+    {
+        if (port is < 1 or > 65535) return false;
+        try
+        {
+            using var client = new TcpClient();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            await client.ConnectAsync(IPAddress.Loopback, port, timeout.Token);
+            return true;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return false; }
+        catch (Exception exception) when (exception is IOException or SocketException or ObjectDisposedException) { return false; }
     }
 
     private void SaveSession()
     {
-        var process = _process!;
-        var session = new OwnedSession(process.Id, process.StartTime.ToUniversalTime().Ticks,
-            _processExecutable!, HttpProxyPort, SocksProxyPort, SettingsKey, ConnectedRegion, Path.GetFileName(NoticePath));
-        var temp = SessionPath + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(session));
-        File.Move(temp, SessionPath, overwrite: true);
+        try
+        {
+            var process = _process!;
+            var session = new OwnedSession(process.Id, process.StartTime.ToUniversalTime().Ticks,
+                _processExecutable!, HttpProxyPort, SocksProxyPort, SettingsKey, ConnectedRegion, Path.GetFileName(NoticePath));
+            var temp = SessionPath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(session));
+            File.Move(temp, SessionPath, overwrite: true);
+        }
+        catch (Exception exception)
+        {
+            // Detach metadata is optional. A locked or unavailable state folder
+            // must not fail a launch, a reconnect or a clean shutdown.
+            _log.Warn("Could not save the tunnel session: " + exception.Message);
+        }
     }
 
     private bool TryAttachOwnedSession()
@@ -436,28 +550,85 @@ public sealed class PsiphonController : IAsyncDisposable
             parts[1].Equals("psiphon-tunnel-core.exe", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task KillOwnedProcessAsync()
+    private async Task<bool> KillOwnedProcessAsync()
     {
-        if (_process is null) return;
-        if (!_process.HasExited)
-        {
-            // Retained handle, no taskkill, name scans, or global core cleanup.
-            _process.Kill();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await _process.WaitForExitAsync(timeout.Token);
-        }
-        _log.Info($"PsiSplit tunnel core {_process.Id} stopped.");
-        _process.Dispose();
+        var process = _process;
+        if (process is null) return true;
         _process = null;
-        _httpPort = _socksPort = _tunnelCount = 0;
-        ResetTunnelInfo();
-        File.Delete(SessionPath);
-        // Each launch gets its own notice file. A reader or antivirus holding an
-        // old file must not prevent a country switch from starting a new core.
-        try { File.Delete(NoticePath); }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        var stopped = true;
+        try
         {
-            _log.Warn("Previous tunnel notices are still in use: " + exception.Message);
+            if (!HasExited(process))
+            {
+                // Retained handle, no taskkill, name scans, or global core cleanup.
+                var killRequested = false;
+                try
+                {
+                    process.Kill();
+                    killRequested = true;
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                    // The core may exit between the HasExited check and Kill.
+                    _log.Warn($"Tunnel core {process.Id} could not be killed: {exception.Message}");
+                }
+
+                if (killRequested && !HasExited(process))
+                {
+                    try
+                    {
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        await process.WaitForExitAsync(timeout.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Release ownership anyway: a launcher-owned Windows job
+                        // still guarantees process cleanup if the caller exits.
+                        _log.Warn($"Tunnel core {process.Id} did not exit within 10 seconds.");
+                    }
+                }
+
+                stopped = HasExited(process);
+            }
+
+            _log.Info(stopped
+                ? $"PsiSplit tunnel core {process.Id} stopped."
+                : $"PsiSplit released the tunnel core {process.Id}, which is still running.");
+        }
+        catch (Exception exception)
+        {
+            // Shutdown must not surface a modal error because a process raced us.
+            _log.Warn($"Stopping tunnel core {process.Id}: {exception.Message}");
+            stopped = false;
+        }
+        finally
+        {
+            process.Dispose();
+            _httpPort = _socksPort = _tunnelCount = 0;
+            ResetTunnelInfo();
+            try { File.Delete(SessionPath); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                _log.Warn("Previous tunnel session is still in use: " + exception.Message);
+            }
+            // Each launch gets its own notice file. A reader or antivirus holding an
+            // old file must not prevent a country switch from starting a new core.
+            try { File.Delete(NoticePath); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                _log.Warn("Previous tunnel notices are still in use: " + exception.Message);
+            }
+        }
+
+        return stopped;
+    }
+
+    private static bool HasExited(Process process)
+    {
+        try { return process.HasExited; }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return true;
         }
     }
 
@@ -469,8 +640,11 @@ public sealed class PsiphonController : IAsyncDisposable
 
     private void SetState(PsiphonState state)
     {
-        if (_state == state) return;
-        _state = state;
+        lock (_stateLock)
+        {
+            if (_state == state) return;
+            _state = state;
+        }
         try { StateChanged?.Invoke(state); }
         catch (Exception exception) { _log.Warn($"StateChanged handler: {exception.Message}"); }
     }
@@ -486,7 +660,11 @@ public sealed class PsiphonController : IAsyncDisposable
             // The caller chooses StopAsync or detach using the exit preference.
             try
             {
-                if (_process is { HasExited: false }) SaveSession();
+                if (_process is not null && !HasExited(_process)) SaveSession();
+            }
+            catch (Exception exception)
+            {
+                _log.Warn("Saving the tunnel session while disposing: " + exception.Message);
             }
             finally
             {

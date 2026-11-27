@@ -13,7 +13,7 @@ It is a **proxy-based routing tool**. Apps must honor the supplied proxy setting
 
 Real application captures from the offline `--preview` mode, using demonstration profiles. No live connection, user app list, account details, or private file paths are shown. Connection controls are disabled in preview.
 
-The gallery shows the 1.1 interface. Version 1.2 adds the live speed display and **Servers** tab described below.
+The gallery shows an earlier interface. Version 1.3.0 also includes live speeds, the **Servers** tab and automatic reconnection described below.
 
 | Home | Sites |
 | --- | --- |
@@ -29,6 +29,7 @@ The gallery shows the 1.1 interface. Version 1.2 adds the live speed display and
 - **App profiles.** Save programs, arguments, and a routing mode. Chromium browsers also receive an explicit proxy argument.
 - **Shell shortcuts.** Launch CMD or PowerShell with proxy environment variables inherited by compatible tools and child processes.
 - **Live speed.** See VPN download/upload rates and separate per-proxy rates, refreshed every second, alongside byte and connection counters.
+- **Automatic recovery.** Short relay interruptions are tolerated while the engine rebuilds its tunnel. After a real loss, PsiSplit restarts it with a capped backoff and keeps Site mode applied.
 - **Exit-country selection.** Choose a country on **Servers**, or let Psiphon choose automatically. The server within a country is selected by the engine.
 - **Tray operation.** Keep routing active while the main window is hidden; exit from the tray menu when finished.
 - **Isolated engine ownership.** Stop only the core managed by this PsiSplit profile. Other Psiphon instances are left alone.
@@ -56,6 +57,14 @@ dotnet build PsiSplit.sln -c Release
 
 The new executable is written to `dist/standalone/PsiSplit.exe`. Publishing does not stop running apps or replace the original `dist/PsiSplit.exe`.
 
+### Codex without opening PsiSplit
+
+The optional [Codex proxy launcher](docs/codex-proxy.md) starts a private background
+tunnel and then opens the installed Windows Codex app with its own proxy. It does
+not change Windows proxy settings or your Codex profile. Build it separately with
+`./publish-codex-launcher.ps1`, then use `dist/codex-proxy/CodexProxy.exe` or a
+shortcut to that executable. Existing Codex sessions are never restarted.
+
 ## How traffic is routed
 
 | Entry point | Local endpoint | Behavior |
@@ -70,6 +79,8 @@ The engine's own HTTP and SOCKS ports are separate, selected by Windows at start
 ## Speed and exit countries
 
 **Home** displays current VPN download and upload in B/s, KB/s, or MB/s. These use the core's actual transferred-payload notices. Full and Filtered proxy rates are shown separately; Filtered includes its direct routes, so it can differ from VPN speed. Rates use the actual elapsed sample time, return to zero when idle, and reset when counters restart. They measure current traffic, not the maximum speed of your internet connection.
+
+Tunnel speed depends mainly on the selected Psiphon server and current network conditions. A busy exit can be several times slower than a direct connection; local Full/Filtered relays add negligible overhead. If speed matters more than a specific country, try **Automatic** or another country on **Servers**.
 
 On **Servers**, select an exit country and choose **Save selection** to keep it for the next connection. Saving leaves the current tunnel running. **Connect with selection** starts a connection; **Reconnect with selection** explicitly replaces the current owned tunnel with the selected preference. **Automatic (best available)** lets Psiphon select both the country and the server.
 
@@ -136,7 +147,7 @@ These are runtime locations, resolved on each machine. Personal settings, logs, 
 ## Routing limits
 
 - This is not a device-wide packet VPN, firewall, virtual network adapter, or per-process packet interceptor. UDP, games, and programs that ignore proxies are not automatically tunneled.
-- There is no kill switch. The generated PAC deliberately includes a `DIRECT` fallback, and Site mode is disabled after a detected tunnel failure. Do not rely on it to prevent direct connections.
+- There is no kill switch. The generated PAC deliberately includes a `DIRECT` fallback. Site mode stays applied during short automatic reconnect attempts and is disabled after a terminal failure. Do not rely on it to prevent direct connections.
 - A selected request arriving at PsiSplit's own proxy receives an error if the core is unavailable; the proxy does not silently reroute that request directly. Browser PAC fallback is a separate behavior.
 - DNS and proxy support depend on the client and chosen route. PsiSplit does not claim system-wide DNS or leak prevention.
 - Loopback proxies have no authentication; other local processes can access them. They are not exposed as LAN services by default.
@@ -147,6 +158,8 @@ These are runtime locations, resolved on each machine. Personal settings, logs, 
 | Symptom | What to check |
 | --- | --- |
 | Connection stays pending | Check the internet connection and **Log**; try again when the network changes. |
+| Status shows **Reconnecting** | The engine is restoring a dropped relay. Wait a few seconds; if recovery takes too long, PsiSplit reports a failure and retries automatically. Turn off auto-reconnect in **Settings** for manual control. |
+| Speed is much lower than direct | The exit server is the bottleneck. Try **Automatic** or another country on **Servers**; local proxy overhead is negligible. |
 | Local services cannot start | Another process may occupy a configured port. Choose distinct ports in **Settings** and restart PsiSplit normally. |
 | Browser ignores an app profile | An existing browser instance may have ignored startup flags. Use Site mode or a separate profile. |
 | A listed page loads partly | Add its authentication, asset, or CDN domains to **Sites**. |

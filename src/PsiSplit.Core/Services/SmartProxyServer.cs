@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -126,6 +127,7 @@ public sealed class SmartProxyServer : IAsyncDisposable
             using (client)
             {
                 client.NoDelay = true;
+                ConfigureKeepAlive(client.Client);
                 using var stream = client.GetStream();
 
                 using var headerTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -240,13 +242,11 @@ public sealed class SmartProxyServer : IAsyncDisposable
                 }
 
                 await clientStream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n"), cancellationToken);
-                _log.Info($"Proxy [{Name}] CONNECT {host}:{port} -> Psiphon");
             }
             else
             {
                 upstream = await ConnectAsync(host, port, cancellationToken);
                 await clientStream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n"), cancellationToken);
-                _log.Info($"Proxy [{Name}] CONNECT {host}:{port} -> direct");
             }
 
             await RelayAsync(client, upstream, cancellationToken, _metrics);
@@ -358,7 +358,6 @@ public sealed class SmartProxyServer : IAsyncDisposable
             await upstreamStream.WriteAsync(requestBytes, cancellationToken);
             _metrics.AddBytesSent(requestBytes.Length);
 
-            _log.Info($"Proxy [{Name}] {method} {host}:{port} -> {(usePsiphon ? "Psiphon" : "direct")}");
             await RelayAsync(client, upstream, cancellationToken, _metrics);
         }
         catch (Exception exception) when (exception is IOException or SocketException or OperationCanceledException)
@@ -381,6 +380,7 @@ public sealed class SmartProxyServer : IAsyncDisposable
             timeout.CancelAfter(TimeSpan.FromSeconds(20));
             await client.ConnectAsync(host, port, timeout.Token);
             client.NoDelay = true;
+            ConfigureKeepAlive(client.Client);
             return client;
         }
         catch
@@ -390,29 +390,47 @@ public sealed class SmartProxyServer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Keeps idle NAT entries warm so a long-lived download or WebSocket is not
+    /// silently dropped by an intermediary while no payload is in flight.
+    /// </summary>
+    private static void ConfigureKeepAlive(Socket socket)
+    {
+        try
+        {
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 30);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 5);
+            socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
+        }
+        catch (Exception exception) when (exception is SocketException or PlatformNotSupportedException or ArgumentException)
+        {
+            // Basic keepalive above is enough on older Windows builds.
+        }
+    }
+
     private static async Task RelayAsync(
         TcpClient first,
         TcpClient second,
         CancellationToken cancellationToken,
         ProxyMetrics metrics)
     {
-        using var relayTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        relayTimeout.CancelAfter(TimeSpan.FromMinutes(15));
-
         var firstStream = first.GetStream();
         var secondStream = second.GetStream();
 
+        // No artificial lifetime: downloads, uploads and WebSockets may stay
+        // open indefinitely. Shutdown or a peer reset is the only reason to stop.
         var firstToSecond = PumpAsync(
             firstStream,
             secondStream,
             second.Client,
-            relayTimeout.Token,
+            cancellationToken,
             metrics.AddBytesSent);
         var secondToFirst = PumpAsync(
             secondStream,
             firstStream,
             first.Client,
-            relayTimeout.Token,
+            cancellationToken,
             metrics.AddBytesReceived);
 
         try
@@ -421,7 +439,7 @@ public sealed class SmartProxyServer : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            // Timeout or shutdown.
+            // Shutdown.
         }
         catch (IOException)
         {
@@ -440,19 +458,18 @@ public sealed class SmartProxyServer : IAsyncDisposable
         CancellationToken cancellationToken,
         Action<int> countBytes)
     {
-        var buffer = new byte[32 * 1024];
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
         try
         {
             while (true)
             {
-                var read = await from.ReadAsync(buffer.AsMemory(), cancellationToken);
+                var read = await from.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
                 if (read == 0)
                 {
                     break;
                 }
 
                 await to.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                await to.FlushAsync(cancellationToken);
                 countBytes(read);
             }
         }
@@ -462,6 +479,7 @@ public sealed class SmartProxyServer : IAsyncDisposable
         }
         finally
         {
+            ArrayPool<byte>.Shared.Return(buffer);
             try
             {
                 toSocket.Shutdown(SocketShutdown.Send);

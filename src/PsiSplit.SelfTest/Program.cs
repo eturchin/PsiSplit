@@ -32,6 +32,7 @@ internal static class Program
         TestPacGenerator();
         TestChatGptDefaults(root);
         TestPacSyntaxWithJScript();
+        CodexLauncherTests.Run(Check);
         await BundledEngineTests.RunLocalAsync(root, Check);
         await ConnectionFeatureTests.RunLocalAsync(root, Check);
 
